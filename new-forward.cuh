@@ -21,38 +21,34 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
-    int W_grid = (W_out-1+16)/16;
+    int W_grid = ceil((W_out)/16.0);
 
-    //(void)H_out; // silence declared but never referenced warning. remove this line when you start working
-    //(void)W_out; // silence declared but never referenced warning. remove this line when you start working
+	// An example use of these macros:
+	// float a = y4d(0,0,0,0)
+	// y4d(0,0,0,0) = a
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
-
-// An example use of these macros:
-// float a = y4d(0,0,0,0)
-// y4d(0,0,0,0) = a
-#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
-#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
-
-int b, m, h, w, c, p, q;
-b = blockIdx.x;
-m = blockIdx.y;
-h = (blockIdx.z / W_grid)  + threadIdx.y;
-w = (blockIdx.z % W_grid)  + threadIdx.x;
-float acc = 0.;
-if (b < B && m < M && h < H_out && w < W_out) {
-  for (c = 0; c < C; c++) { // sum over all input channels
-    for (p = 0; p < K; p++) {// loop over KxK filter
-      for (q = 0; q < K; q++) {
-        acc += acc + x4d(b, c, h + p, w + q) * k4d(m, c, p, q);
-      }
-    }
-  }
-  y4d(b, m, h, w) = acc;
-}
-#undef y4d
-#undef x4d
-#undef k4d
+	int b, m, h, w, c, p, q;
+	b = blockIdx.x;
+	m = blockIdx.y;
+	h = (blockIdx.z / W_grid) * blockDim.y + threadIdx.y;
+	w = (blockIdx.z % W_grid) * blockDim.x + threadIdx.x;
+	float acc = 0.;
+	if (b < B && m < M && h < H_out && w < W_out) {
+	  for (c = 0; c < C; c++) { // sum over all input channels
+		for (p = 0; p < K; p++) {// loop over KxK filter
+		  for (q = 0; q < K; q++) {
+			acc += x4d(b, c, h + p, w + q) * k4d(m, c, p, q);
+		  }
+		}
+	  }
+	  y4d(b, m, h, w) = acc;
+	}
+	#undef y4d
+	#undef x4d
+	#undef k4d
 }
 
 /*
