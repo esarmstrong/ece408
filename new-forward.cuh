@@ -94,11 +94,6 @@ __global__ void forward_kernel_optimized(float *y, const float *x, const float *
 		// load tile from X[n, c,…] into shared memory
 		for (int i = h; i < h_base + X_tile_width; i += TILE_WIDTH) {
 			for (int j = w; j < w_base + X_tile_width; j += TILE_WIDTH) {
-				/*if (i - halo_size > 0 && j - halo_size > 0 && i - halo_size < H && j - halo_size < W) {
-					X_shared[(i - h_base) * X_tile_width + (j - w_base)] = x4d(n, c, i - halo_size, j - halo_size);
-				} else {
-					X_shared[(i - h_base) * X_tile_width + (j - w_base)] = 0;
-				}*/
 				if (i < H && j < W) {
 					X_shared[(i - h_base) * X_tile_width + (j - w_base)] = x4d(n, c, i, j);
 				} else {
