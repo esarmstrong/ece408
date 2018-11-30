@@ -5,6 +5,7 @@
 #include <mxnet/base.h>
 
 #define TILE_WIDTH 16
+__constant__ float weightMatrix[24*12*7*7];
 
 namespace mxnet
 {
@@ -53,9 +54,53 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 	#undef k4d
 }
 
-__global__ void forward_kernel_optimized(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
+__global__ void forward_kernel_constant(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
 {
-	
+
+    /*
+    Modify this function to implement the forward pass described in Chapter 16.
+    We have added an additional dimension to the tensors to support an entire mini-batch
+    The goal here is to be correct AND fast.
+    We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
+    */
+
+    const int H_out = H - K + 1;
+    const int W_out = W - K + 1;
+    int W_grid = ceil((W_out)/16.0);
+
+	// An example use of these macros:
+	// float a = y4d(0,0,0,0)
+	// y4d(0,0,0,0) = a
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+  #define ck4d(i3, i2, i1, i0) weightMatrix[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+
+	int b, m, h, w, c, p, q;
+	b = blockIdx.x;
+	m = blockIdx.y;
+	h = (blockIdx.z / W_grid) * blockDim.y + threadIdx.y;
+	w = (blockIdx.z % W_grid) * blockDim.x + threadIdx.x;
+	float acc = 0.;
+	if (b < B && m < M && h < H_out && w < W_out) {
+	  for (c = 0; c < C; c++) { // sum over all input channels
+		for (p = 0; p < K; p++) {// loop over KxK filter
+		  for (q = 0; q < K; q++) {
+			acc += x4d(b, c, h + p, w + q) * ck4d(m, c, p, q);
+		  }
+		}
+	  }
+	  y4d(b, m, h, w) = acc;
+	}
+	#undef y4d
+	#undef x4d
+	#undef k4d
+  #undef ck4d
+}
+
+__global__ void forward_kernel_shared(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
+{
+
 	const int H_out = H - K + 1;
     const int W_out = W - K + 1;
 	int W_grid = ceil((W_out)/16.0);
@@ -85,12 +130,12 @@ __global__ void forward_kernel_optimized(float *y, const float *x, const float *
 	for(int c = 0; c < C; c++) {	// sum over all input channels
 									// load weights for W [m, c,..],
 									// h0 and w0 used as shorthand for threadIdx.x
-									// and threadIdx.y	
+									// and threadIdx.y
 		if ((h0 < K) && (w0 < K)) {
 			W_shared[h0 * K + w0]= k4d(m, c, h0, w0);
 		}
 		__syncthreads();
-		
+
 		// load tile from X[n, c,…] into shared memory
 		for (int i = h; i < h_base + X_tile_width; i += TILE_WIDTH) {
 			for (int j = w; j < w_base + X_tile_width; j += TILE_WIDTH) {
@@ -102,7 +147,7 @@ __global__ void forward_kernel_optimized(float *y, const float *x, const float *
 			}
 		}
 		__syncthreads();
-		
+
 		for(int p = 0; p < K; p++) {
 			for(int q = 0; q < K; q++) {
 				if((h0 + p) < X_tile_width && (w0 + q) < X_tile_width) {
@@ -112,7 +157,7 @@ __global__ void forward_kernel_optimized(float *y, const float *x, const float *
 		}
 		__syncthreads();
 	}
-		
+
 	if (n < B && m < M && h < H_out && w < W_out) {
 		y4d(n, m, h, w) = acc;
 	}
@@ -153,12 +198,23 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     // Set the kernel dimensions
     dim3 gridDim(B,M,Z);
     dim3 blockDim(TILE_WIDTH,TILE_WIDTH,1);
-	
+
     // Call the kernel
     //forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
 
-	size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
-    forward_kernel_optimized<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
+
+    const float* kernel = w.dptr_;
+    float hostKernel[M*C*K*K];
+    cudaMemcpy(hostKernel, kernel, M*C*K*K* sizeof(float), cudaMemcpyDeviceToHost );
+    cudaMemcpyToSymbol(weightMatrix,hostKernel,sizeof(float)*M*C*K*K);
+    forward_kernel_constant<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
+    
+
+    /*
+	  size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
+    forward_kernel_shared<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
+    */
+
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
