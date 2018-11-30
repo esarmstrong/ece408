@@ -166,6 +166,38 @@ __global__ void forward_kernel_shared(float *y, const float *x, const float *k, 
 	#undef k4d
 }
 
+__global__ void unroll_Kernel(int C, int H, int W, int K, float* X, float* X_unroll)
+{
+ int c, s, h_out, w-out, h_unroll, w_base, p, q;
+ int t = blockId.x * CUDA MAX_NUM_THREADS + threadId.x;
+ int H_out = H – K + 1;
+ int W_out = W – K + 1;
+ int W_unroll = H_out * W_out;
+ if (t < C * W_unroll) {
+   c = t / W_unroll;
+   s = t % W_unroll;
+   h_out = s / W_out;
+   w_out = s % W_out;
+   h_unroll = h_out * W_out + w_out;
+   w_base = c * K * K;
+   for(p = 0; p < K; p++)
+     for(q = 0; q < K; q++) {
+       w_unroll = w_base + p * K + q;
+       X_unroll(h_unroll, w_unroll) = X(c, h_out + p, w_out + q);
+     }
+ }
+}
+
+void unroll_gpu(int C, int H, int W, int K, float* X, float* X_unroll)
+{
+ int H_out = H – K + 1;
+ int W_out = W – K + 1;
+ int num_threads = C * H_out * W_out;
+ int num_blocks = ceil((C * H_out * W_out) / CUDA MAX_NUM_THREADS);
+ unroll_Kernel<<<num_blocks, CUDA MAX_NUM_THREADS>>>();
+}
+
+
 /*
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -208,7 +240,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     cudaMemcpy(hostKernel, kernel, M*C*K*K* sizeof(float), cudaMemcpyDeviceToHost );
     cudaMemcpyToSymbol(weightMatrix,hostKernel,sizeof(float)*M*C*K*K);
     forward_kernel_constant<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
-    
+
 
     /*
 	  size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
