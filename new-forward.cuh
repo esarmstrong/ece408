@@ -166,10 +166,11 @@ __global__ void forward_kernel_shared(float *y, const float *x, const float *k, 
 	#undef k4d
 }
 
-__global__ void unroll_Kernel(int C, int H, int W, int K, float* X, float* X_unroll)
+__global__ void unroll_Kernel(int C, int H, int W, int n, int K, float* X, float* X_unroll)
 {
+ #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
  int c, s, h_out, w-out, h_unroll, w_base, p, q;
- int t = blockId.x * CUDA MAX_NUM_THREADS + threadId.x;
+ int t = blockIdx.x * 1024 + threadIdx.x;
  int H_out = H – K + 1;
  int W_out = W – K + 1;
  int W_unroll = H_out * W_out;
@@ -183,18 +184,32 @@ __global__ void unroll_Kernel(int C, int H, int W, int K, float* X, float* X_unr
    for(p = 0; p < K; p++)
      for(q = 0; q < K; q++) {
        w_unroll = w_base + p * K + q;
-       X_unroll(h_unroll, w_unroll) = X(c, h_out + p, w_out + q);
+       X_unroll(h_unroll*W_unroll + w_unroll) = x4d(n, c, h_out + p, w_out + q);
      }
  }
+ #undef x4d
 }
 
-void unroll_gpu(int C, int H, int W, int K, float* X, float* X_unroll)
+void unroll_gpu(int C, int H, int W, int n, int K, float* X, float* X_unroll)
 {
  int H_out = H – K + 1;
  int W_out = W – K + 1;
  int num_threads = C * H_out * W_out;
- int num_blocks = ceil((C * H_out * W_out) / CUDA MAX_NUM_THREADS);
- unroll_Kernel<<<num_blocks, CUDA MAX_NUM_THREADS>>>();
+ int num_blocks = ceil((C * H_out * W_out) / 1024);
+ unroll_Kernel<<<num_blocks, 1024>>>(C, H, W, n, K, X, X_unroll);
+}
+
+void convLayer_forward(int N, int M, int C, int H, int W, int K, float* X, float* W_unroll, float* Y)
+{
+ int W_out = W – K + 1;
+ int H_out = H – K + 1;
+ int W_unroll = C * K * K;
+ int H_unroll = H_out * W_out;
+ float* X_unrolled = malloc(W_unroll * H_unroll * sizeof(float));
+ for (int n=0; n < N; n++) {
+   unroll_gpu(C, H, W, K, n, X, X_unrolled);
+   gemm(H_unroll, M, W_unroll, X_unrolled, W, Y[n]);
+ }
 }
 
 
@@ -234,13 +249,14 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     // Call the kernel
     //forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
 
-
+    /*
     const float* kernel = w.dptr_;
     float hostKernel[M*C*K*K];
     cudaMemcpy(hostKernel, kernel, M*C*K*K* sizeof(float), cudaMemcpyDeviceToHost );
     cudaMemcpyToSymbol(weightMatrix,hostKernel,sizeof(float)*M*C*K*K);
     forward_kernel_constant<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
-
+    */
+    
 
     /*
 	  size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
