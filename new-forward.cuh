@@ -165,7 +165,7 @@ __global__ void forward_kernel_shared(float *y, const float *x, const float *k, 
 	#undef k4d
 }
 
-__global__ void unroll_Kernel(int C, int H, int W, int n, int K, float* X, float* X_unroll)
+__global__ void unroll_Kernel(int C, int H, int W, int n, int K, float* x, float* X_unroll)
 {
 	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 	int c, s, h_out, w-out, h_unroll, w_base, p, q;
@@ -212,6 +212,44 @@ void convLayer_forward(int N, int M, int C, int H, int W, int K, float* X, float
 	}
 }
 
+
+__global__ void matrixMultiplyShared(float *A, float *B, float *C,  
+                                     int numARows, int numAColumns,
+                                     int numBRows, int numBColumns,
+                                     int numCRows, int numCColumns) {
+  __shared__ float tileA[TILE_WIDTH][TILE_WIDTH];
+  __shared__ float tileB[TILE_WIDTH][TILE_WIDTH];
+  
+  int col = threadIdx.x + blockIdx.x * TILE_WIDTH;
+  int row = threadIdx.y + blockIdx.y * TILE_WIDTH;
+  
+  float val = 0;
+
+  for(int i = 0; i < ceil(1.0 * numAColumns / TILE_WIDTH); i++) {
+    if(row < numARows && (i * TILE_WIDTH + threadIdx.x) < numAColumns) {
+      tileA[threadIdx.y][threadIdx.x] = A[row * numAColumns + (i * TILE_WIDTH + threadIdx.x)];
+    } else {
+      tileA[threadIdx.y][threadIdx.x] = 0;
+    }
+
+    if(col < numBColumns && (i * TILE_WIDTH + threadIdx.y) < numBRows) {
+      tileB[threadIdx.y][threadIdx.x] = B[(i * TILE_WIDTH + threadIdx.y) * numBColumns + col];
+    } else {
+      tileB[threadIdx.y][threadIdx.x] = 0;
+    }
+    __syncthreads();
+
+    for(int i = 0; i < TILE_WIDTH; i++) {
+      val += tileA[threadIdx.y][i] * tileB[i][threadIdx.x];
+    }
+
+    __syncthreads();
+  }
+    
+  if(row < numCRows && col < numCColumns) {
+    C[row * numCColumns + col] = val;
+  }
+}
 
 /*
    This function is called by new-inl.h
@@ -262,6 +300,21 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 	  size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
     forward_kernel_shared<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
     */
+	
+	/*
+	//Matrix Multiply call
+	dim3 dimGrid(ceil((1.0*numCColumns)/TILE_WIDTH), ceil((1.0*numCRows)/TILE_WIDTH), 1);
+  
+	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1); 
+	  
+	wbTime_start(Compute, "Performing CUDA computation");
+	//@@ Launch the GPU Kernel here
+	matrixMultiplyShared<<<dimGrid, dimBlock>>>(deviceA, deviceB, deviceC, 
+												numARows, numAColumns, 
+												numBRows, numBColumns, 
+												numCRows, numCColumns);
+	cudaDeviceSynchronize();
+	*/
 
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
