@@ -181,12 +181,12 @@ __global__ void unroll_Kernel(int C, int H, int W, int b, int K, float* x, float
 		s = t % W_unroll;
 		row_out = s / W_out;
 		col_out = s % W_out;
-		row_unroll = row_out * W_out + col_out;
+		col_unroll = row_out * W_out + col_out;
 		w_base = c * K * K;
 		for(p = 0; p < K; p++) {
 			for(q = 0; q < K; q++) {
+				row_unroll = w_base + p * K + q;
 				if (row_out + p < H && col_out + q < W && row_unroll < H_unroll && col_unroll < W_unroll) {
-					col_unroll = w_base + p * K + q;
 					X_unroll[row_unroll * W_unroll + col_unroll] = x4d(b, c, row_out + p, col_out + q);
 				}
 			}
@@ -291,7 +291,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 	cudaMalloc((void **) &X_unrolled, W_unroll * H_unroll * sizeof(float));
 
 	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1); 
-	dim3 dimGrid(ceil((1.0*H_unroll)/TILE_WIDTH), ceil((1.0*M)/TILE_WIDTH), 1);
+	dim3 dimGrid(ceil((1.0*W_unroll)/TILE_WIDTH), ceil((1.0*M)/TILE_WIDTH), 1);
 
 	int num_blocks = ceil((C * H_out * W_out) / CUDA_MAX_NUM_THREADS);
 
