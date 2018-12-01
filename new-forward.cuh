@@ -74,7 +74,7 @@ __global__ void forward_kernel_constant(float *y, const float *x, const float *k
 	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
 	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 	#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
-  #define ck4d(i3, i2, i1, i0) weightMatrix[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+	#define ck4d(i3, i2, i1, i0) weightMatrix[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
 	int b, m, h, w, c, p, q;
 	b = blockIdx.x;
@@ -113,7 +113,6 @@ __global__ void forward_kernel_shared(float *y, const float *x, const float *k, 
 	#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
 	int n, m, h0, w0, h_base, w_base, h, w;
-	int halo_size = K - 1 / 2;
 	int X_tile_width = TILE_WIDTH + K-1;
 	extern __shared__ float shared_mem[];
 	float* X_shared = &shared_mem[0];
@@ -168,48 +167,49 @@ __global__ void forward_kernel_shared(float *y, const float *x, const float *k, 
 
 __global__ void unroll_Kernel(int C, int H, int W, int n, int K, float* X, float* X_unroll)
 {
- #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
- int c, s, h_out, w-out, h_unroll, w_base, p, q;
- int t = blockIdx.x * 1024 + threadIdx.x;
- int H_out = H – K + 1;
- int W_out = W – K + 1;
- int W_unroll = H_out * W_out;
- if (t < C * W_unroll) {
-   c = t / W_unroll;
-   s = t % W_unroll;
-   h_out = s / W_out;
-   w_out = s % W_out;
-   h_unroll = h_out * W_out + w_out;
-   w_base = c * K * K;
-   for(p = 0; p < K; p++)
-     for(q = 0; q < K; q++) {
-       w_unroll = w_base + p * K + q;
-       X_unroll(h_unroll*W_unroll + w_unroll) = x4d(n, c, h_out + p, w_out + q);
-     }
- }
- #undef x4d
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	int c, s, h_out, w-out, h_unroll, w_base, p, q;
+	int t = blockIdx.x * 1024 + threadIdx.x;
+	int H_out = H – K + 1;
+	int W_out = W – K + 1;
+	int W_unroll = H_out * W_out;
+	if (t < C * W_unroll) {
+		c = t / W_unroll;
+		s = t % W_unroll;
+		h_out = s / W_out;
+		w_out = s % W_out;
+		h_unroll = h_out * W_out + w_out;
+		w_base = c * K * K;
+		for(p = 0; p < K; p++) {
+			for(q = 0; q < K; q++) {
+				w_unroll = w_base + p * K + q;
+				X_unroll(h_unroll*W_unroll + w_unroll) = x4d(n, c, h_out + p, w_out + q);
+			}
+		}
+	}
+	#undef x4d
 }
 
 void unroll_gpu(int C, int H, int W, int n, int K, float* X, float* X_unroll)
 {
- int H_out = H – K + 1;
- int W_out = W – K + 1;
- int num_threads = C * H_out * W_out;
- int num_blocks = ceil((C * H_out * W_out) / 1024);
- unroll_Kernel<<<num_blocks, 1024>>>(C, H, W, n, K, X, X_unroll);
+	int H_out = H – K + 1;
+	int W_out = W – K + 1;
+	int num_threads = C * H_out * W_out;
+	int num_blocks = ceil((C * H_out * W_out) / 1024);
+	unroll_Kernel<<<num_blocks, 1024>>>(C, H, W, n, K, X, X_unroll);
 }
 
 void convLayer_forward(int N, int M, int C, int H, int W, int K, float* X, float* W_unroll, float* Y)
 {
- int W_out = W – K + 1;
- int H_out = H – K + 1;
- int W_unroll = C * K * K;
- int H_unroll = H_out * W_out;
- float* X_unrolled = malloc(W_unroll * H_unroll * sizeof(float));
- for (int n=0; n < N; n++) {
-   unroll_gpu(C, H, W, K, n, X, X_unrolled);
-   gemm(H_unroll, M, W_unroll, X_unrolled, W, Y[n]);
- }
+	int W_out = W – K + 1;
+	int H_out = H – K + 1;
+	int W_unroll = C * K * K;
+	int H_unroll = H_out * W_out;
+	float* X_unrolled = malloc(W_unroll * H_unroll * sizeof(float));
+	for (int n=0; n < N; n++) {
+		unroll_gpu(C, H, W, K, n, X, X_unrolled);
+		gemm(H_unroll, M, W_unroll, X_unrolled, W, Y[n]);
+	}
 }
 
 
