@@ -175,8 +175,7 @@ __global__ void unroll_Kernel(int C, int H, int W, int b, int K, float* x, float
 	int H_out = H - K + 1;
 	int W_out = W - K + 1;
 	int W_unroll = H_out * W_out;
-	int H_unroll = C * K * K;
-	if (t < C * W_unroll) {
+	if (t < C * W_unroll) {	
 		c = t / W_unroll;
 		s = t % W_unroll;
 		row_out = s / W_out;
@@ -186,9 +185,7 @@ __global__ void unroll_Kernel(int C, int H, int W, int b, int K, float* x, float
 		for(p = 0; p < K; p++) {
 			for(q = 0; q < K; q++) {
 				row_unroll = w_base + p * K + q;
-				if (row_out + p < H && col_out + q < W && row_unroll < H_unroll && col_unroll < W_unroll) {
-					X_unroll[row_unroll * W_unroll + col_unroll] = x4d(b, c, row_out + p, col_out + q);
-				}
+				X_unroll[row_unroll * W_unroll + col_unroll] = x4d(b, c, row_out + p, col_out + q);
 			}
 		}
 	}
@@ -233,6 +230,25 @@ __global__ void matrixMultiplyShared(float *A, float *B, float *C,
   }
 }
 
+__global__ void matrixMultiply(float *A, float *B, float *C, int numARows,
+                               int numAColumns, int numBRows,
+                               int numBColumns, int numCRows,
+                               int numCColumns) {
+  //@@ Insert code to implement matrix multiplication here
+  int col = threadIdx.x + blockIdx.x * blockDim.x;
+  int row = threadIdx.y + blockIdx.y * blockDim.y;
+  
+  if((col < numCColumns) && (row < numCRows)) {
+    float val = 0;
+    
+    for(int i = 0; i < numAColumns; i++) {
+      val += A[row * numAColumns + i] * B[i * numBColumns + col];
+    }
+    
+    C[row * numCColumns + col] = val;
+  }
+}
+
 /*
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -258,13 +274,16 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
-    int W_grid = ceil((W_out)/16.0);
+    
+	/*
+	int W_grid = ceil((W_out)/16.0);
     int H_grid = ceil((H_out)/16.0);
     int Z = H_grid*W_grid;
 
     // Set the kernel dimensions
     dim3 gridDim(B,M,Z);
     dim3 blockDim(TILE_WIDTH,TILE_WIDTH,1);
+	*/
 
     // Call the kernel
     //forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
@@ -291,9 +310,9 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 	cudaMalloc((void **) &X_unrolled, W_unroll * H_unroll * sizeof(float));
 
 	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1); 
-	dim3 dimGrid(ceil((1.0*W_unroll)/TILE_WIDTH), ceil((1.0*M)/TILE_WIDTH), 1);
+	dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH), ceil((1.0 * M)/TILE_WIDTH), 1);
 
-	int num_blocks = ceil((C * H_out * W_out) / CUDA_MAX_NUM_THREADS);
+	int num_blocks = ceil((1.0 * C * H_out * W_out) / CUDA_MAX_NUM_THREADS);
 
 	for (int b = 0; b < B; b++) {
 		float* curr_output = &y.dptr_[b * M * H_out * W_out];
@@ -304,15 +323,6 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 													H_unroll, W_unroll, 
 													M, W_unroll);
 	}
-	
-	/*
-	//Matrix Multiply call
-	  
-	wbTime_start(Compute, "Performing CUDA computation");
-	//@@ Launch the GPU Kernel here
-	
-	cudaDeviceSynchronize();
-	*/
 
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
