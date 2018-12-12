@@ -286,7 +286,7 @@ __global__ void matrixMultiplyUnroll(int C, int H, int W, int b, int K, float * 
 	#undef k4d
 }
 
-__global__ void matrixMultiplySharedUnroll(int C, int H, int W, int b, int K, float * x, float *y, float *k, 
+__global__ void matrixMultiplySharedUnroll(int M, int C, int H, int W, int K, float * x, float *y, float *k, 
 																																							int numKRows, int numKColumns, 
 																																							int numXRows,	int numXColumns, 
 																																							int numYRows, int numYColumns) {
@@ -318,7 +318,7 @@ __global__ void matrixMultiplySharedUnroll(int C, int H, int W, int b, int K, fl
 			int x_index_row = (x_index_s / K) + (col / W_out);
 			int x_index_col = (x_index_s % K) + (col % W_out);
 
-      tileX[threadIdx.y][threadIdx.x] = x4d(b, x_index_c, x_index_row, x_index_col);
+      tileX[threadIdx.y][threadIdx.x] = x4d(blockIdx.z, x_index_c, x_index_row, x_index_col);
     } else {
       tileX[threadIdx.y][threadIdx.x] = 0;
     }
@@ -332,7 +332,7 @@ __global__ void matrixMultiplySharedUnroll(int C, int H, int W, int b, int K, fl
   }
     
   if(row < numYRows && col < numYColumns) {
-    y[row * numYColumns + col] = val;
+    y[blockIdx.z * (M * H_out * W_out) + row * numYColumns + col] = val;
   }
 
 	#undef y4d
@@ -420,16 +420,21 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 	int H_unroll = C * K * K;
 
 	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1); 
-	dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH), ceil((1.0 * M)/TILE_WIDTH), 1);
+	dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH), ceil((1.0 * M)/TILE_WIDTH), B);
 
 
-	for (int b = 0; b < B; b++) {
-		float* curr_output = &y.dptr_[b * M * H_out * W_out];
-		matrixMultiplySharedUnroll<<<dimGrid, dimBlock>>>(C, H, W, b, K, x.dptr_, curr_output, w.dptr_,
+	// for (int b = 0; b < B; b++) {
+	// 	float* curr_output = &y.dptr_[b * M * H_out * W_out];
+	// 	matrixMultiplySharedUnroll<<<dimGrid, dimBlock>>>(C, H, W, b, K, x.dptr_, curr_output, w.dptr_,
+	// 												M, H_unroll, 
+	// 												H_unroll, W_unroll, 
+	// 												M, W_unroll);
+	// }
+
+	matrixMultiplySharedUnroll<<<dimGrid, dimBlock>>>(M, C, H, W, K, x.dptr_, y.dptr_, w.dptr_,
 													M, H_unroll, 
 													H_unroll, W_unroll, 
 													M, W_unroll);
-	}
 
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
