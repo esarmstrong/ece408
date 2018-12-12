@@ -249,6 +249,97 @@ __global__ void matrixMultiply(float *A, float *B, float *C, int numARows,
   }
 }
 
+__global__ void matrixMultiplyUnroll(int C, int H, int W, int b, int K, float * x, float *y, float *k, 
+																																				int numARows, int numAColumns, 
+																																				int numBRows,	int numBColumns, 
+																																				int numCRows, int numCColumns) {
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+
+	int H_out = H - K + 1;
+	int W_out = W - K + 1;
+
+  int col = threadIdx.x + blockIdx.x * blockDim.x;
+  int row = threadIdx.y + blockIdx.y * blockDim.y;
+  
+  if((col < numCColumns) && (row < numCRows)) {
+    float val = 0;
+    
+    for(int i = 0; i < numAColumns; i++) {
+			int x_unrolled_index = i * numBColumns + col;
+
+			int x_index_c =  i / (K * K);
+			int x_index_s = i % (K * K);
+
+			int x_index_row = (x_index_s / K) + (col / W_out);
+			int x_index_col = (x_index_s % K) + (col % W_out);
+
+      val += k[row * numAColumns + i] * x4d(b, x_index_c, x_index_row, x_index_col);
+    }
+    
+    y[row * numCColumns + col] = val;
+  }
+
+	#undef y4d
+	#undef x4d
+	#undef k4d
+}
+
+__global__ void matrixMultiplySharedUnroll(int C, int H, int W, int b, int K, float * x, float *y, float *k, 
+																																							int numKRows, int numKColumns, 
+																																							int numXRows,	int numXColumns, 
+																																							int numYRows, int numYColumns) {
+
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+
+  __shared__ float tileK[TILE_WIDTH][TILE_WIDTH];
+  __shared__ float tileX[TILE_WIDTH][TILE_WIDTH];
+  
+  int col = threadIdx.x + blockIdx.x * TILE_WIDTH;
+  int row = threadIdx.y + blockIdx.y * TILE_WIDTH;
+
+	int H_out = H - K + 1;
+	int W_out = W - K + 1;
+  
+  float val = 0;
+
+  for(int i = 0; i < ceil(1.0 * numKColumns / TILE_WIDTH); i++) {
+    if(row < numKRows && (i * TILE_WIDTH + threadIdx.x) < numKColumns) {
+      tileK[threadIdx.y][threadIdx.x] = k[row * numKColumns + (i * TILE_WIDTH + threadIdx.x)];
+    } else {
+      tileK[threadIdx.y][threadIdx.x] = 0;
+    }
+
+    if(col < numXColumns && (i * TILE_WIDTH + threadIdx.y) < numXRows) {
+			int x_index_c =  (i * TILE_WIDTH + threadIdx.y) / (K * K);
+			int x_index_s = (i * TILE_WIDTH + threadIdx.y) % (K * K);
+
+			int x_index_row = (x_index_s / K) + (col / W_out);
+			int x_index_col = (x_index_s % K) + (col % W_out);
+
+      tileX[threadIdx.y][threadIdx.x] = x4d(b, x_index_c, x_index_row, x_index_col);
+    } else {
+      tileX[threadIdx.y][threadIdx.x] = 0;
+    }
+    __syncthreads();
+
+    for(int i = 0; i < TILE_WIDTH; i++) {
+      val += tileK[threadIdx.y][i] * tileX[i][threadIdx.x];
+    }
+
+    __syncthreads();
+  }
+    
+  if(row < numYRows && col < numYColumns) {
+    y[row * numYColumns + col] = val;
+  }
+
+	#undef y4d
+	#undef x4d
+	#undef k4d
+}
+
 /*
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -302,7 +393,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     forward_kernel_shared<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
     */
 	
-	
+	/*
 	int W_unroll = H_out * W_out;
 	int H_unroll = C * K * K;
 	
@@ -319,6 +410,22 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 		unroll_Kernel<<<num_blocks, CUDA_MAX_NUM_THREADS>>>(C, H, W, b, K, x.dptr_, X_unrolled);
 
 		matrixMultiplyShared<<<dimGrid, dimBlock>>>(w.dptr_, X_unrolled, curr_output, 
+													M, H_unroll, 
+													H_unroll, W_unroll, 
+													M, W_unroll);
+	}
+	*/
+
+	int W_unroll = H_out * W_out;
+	int H_unroll = C * K * K;
+
+	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1); 
+	dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH), ceil((1.0 * M)/TILE_WIDTH), 1);
+
+
+	for (int b = 0; b < B; b++) {
+		float* curr_output = &y.dptr_[b * M * H_out * W_out];
+		matrixMultiplySharedUnroll<<<dimGrid, dimBlock>>>(C, H, W, b, K, x.dptr_, curr_output, w.dptr_,
 													M, H_unroll, 
 													H_unroll, W_unroll, 
 													M, W_unroll);
