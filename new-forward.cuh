@@ -175,7 +175,7 @@ __global__ void unroll_Kernel(int C, int H, int W, int b, int K, float* x, float
 	int H_out = H - K + 1;
 	int W_out = W - K + 1;
 	int W_unroll = H_out * W_out;
-	if (t < C * W_unroll) {	
+	if (t < C * W_unroll) {
 		c = t / W_unroll;
 		s = t % W_unroll;
 		row_out = s / W_out;
@@ -192,16 +192,16 @@ __global__ void unroll_Kernel(int C, int H, int W, int b, int K, float* x, float
 	#undef x4d
 }
 
-__global__ void matrixMultiplyShared(float *A, float *B, float *C,  
+__global__ void matrixMultiplyShared(float *A, float *B, float *C,
                                      int numARows, int numAColumns,
                                      int numBRows, int numBColumns,
                                      int numCRows, int numCColumns) {
   __shared__ float tileA[TILE_WIDTH][TILE_WIDTH];
   __shared__ float tileB[TILE_WIDTH][TILE_WIDTH];
-  
+
   int col = threadIdx.x + blockIdx.x * TILE_WIDTH;
   int row = threadIdx.y + blockIdx.y * TILE_WIDTH;
-  
+
   float val = 0;
 
   for(int i = 0; i < ceil(1.0 * numAColumns / TILE_WIDTH); i++) {
@@ -224,7 +224,7 @@ __global__ void matrixMultiplyShared(float *A, float *B, float *C,
 
     __syncthreads();
   }
-    
+
   if(row < numCRows && col < numCColumns) {
     C[row * numCColumns + col] = val;
   }
@@ -237,21 +237,21 @@ __global__ void matrixMultiply(float *A, float *B, float *C, int numARows,
   //@@ Insert code to implement matrix multiplication here
   int col = threadIdx.x + blockIdx.x * blockDim.x;
   int row = threadIdx.y + blockIdx.y * blockDim.y;
-  
+
   if((col < numCColumns) && (row < numCRows)) {
     float val = 0;
-    
+
     for(int i = 0; i < numAColumns; i++) {
       val += A[row * numAColumns + i] * B[i * numBColumns + col];
     }
-    
+
     C[row * numCColumns + col] = val;
   }
 }
 
-__global__ void matrixMultiplyUnroll(int C, int H, int W, int b, int K, float * x, float *y, float *k, 
-																																				int numARows, int numAColumns, 
-																																				int numBRows,	int numBColumns, 
+__global__ void matrixMultiplyUnroll(int C, int H, int W, int b, int K, float * x, float *y, float *k,
+																																				int numARows, int numAColumns,
+																																				int numBRows,	int numBColumns,
 																																				int numCRows, int numCColumns) {
 	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
 	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
@@ -262,10 +262,10 @@ __global__ void matrixMultiplyUnroll(int C, int H, int W, int b, int K, float * 
 
   int col = threadIdx.x + blockIdx.x * blockDim.x;
   int row = threadIdx.y + blockIdx.y * blockDim.y;
-  
+
   if((col < numCColumns) && (row < numCRows)) {
     float val = 0;
-    
+
     for(int i = 0; i < numAColumns; i++) {
 			int x_unrolled_index = i * numBColumns + col;
 
@@ -277,7 +277,7 @@ __global__ void matrixMultiplyUnroll(int C, int H, int W, int b, int K, float * 
 
       val += k[row * numAColumns + i] * x4d(b, x_index_c, x_index_row, x_index_col);
     }
-    
+
     y[row * numCColumns + col] = val;
   }
 
@@ -286,22 +286,22 @@ __global__ void matrixMultiplyUnroll(int C, int H, int W, int b, int K, float * 
 	#undef k4d
 }
 
-__global__ void matrixMultiplySharedUnroll(int M, int C, int H, int W, int K, float * x, float *y, float *k, 
-																																							int numKRows, int numKColumns, 
-																																							int numXRows,	int numXColumns, 
+__global__ void matrixMultiplySharedUnroll(int M, int C, int H, int W, int K, const float* __restrict__ x, float* __restrict__ y, const float* __restrict__ k,
+																																							int numKRows, int numKColumns,
+																																							int numXRows,	int numXColumns,
 																																							int numYRows, int numYColumns) {
 
 	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 
   __shared__ float tileK[TILE_WIDTH][TILE_WIDTH];
   __shared__ float tileX[TILE_WIDTH][TILE_WIDTH];
-  
+
   int col = threadIdx.x + blockIdx.x * TILE_WIDTH;
   int row = threadIdx.y + blockIdx.y * TILE_WIDTH;
 
 	int H_out = H - K + 1;
 	int W_out = W - K + 1;
-  
+
   float val = 0;
 
   for(int i = 0; i < ceil(1.0 * numKColumns / TILE_WIDTH); i++) {
@@ -324,13 +324,14 @@ __global__ void matrixMultiplySharedUnroll(int M, int C, int H, int W, int K, fl
     }
     __syncthreads();
 
+    #pragma unroll
     for(int i = 0; i < TILE_WIDTH; i++) {
       val += tileK[threadIdx.y][i] * tileX[i][threadIdx.x];
     }
 
     __syncthreads();
   }
-    
+
   if(row < numYRows && col < numYColumns) {
     y[blockIdx.z * (M * H_out * W_out) + row * numYColumns + col] = val;
   }
@@ -365,7 +366,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
-    
+
 	/*
 	int W_grid = ceil((W_out)/16.0);
     int H_grid = ceil((H_out)/16.0);
@@ -386,21 +387,21 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     cudaMemcpyToSymbol(weightMatrix,hostKernel,sizeof(float)*M*C*K*K);
     forward_kernel_constant<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
     */
-    
+
 
     /*
 	  size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
     forward_kernel_shared<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
     */
-	
+
 	/*
 	int W_unroll = H_out * W_out;
 	int H_unroll = C * K * K;
-	
+
 	float* X_unrolled;
 	cudaMalloc((void **) &X_unrolled, W_unroll * H_unroll * sizeof(float));
 
-	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1); 
+	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
 	dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH), ceil((1.0 * M)/TILE_WIDTH), 1);
 
 	int num_blocks = ceil((1.0 * C * H_out * W_out) / CUDA_MAX_NUM_THREADS);
@@ -409,9 +410,9 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 		float* curr_output = &y.dptr_[b * M * H_out * W_out];
 		unroll_Kernel<<<num_blocks, CUDA_MAX_NUM_THREADS>>>(C, H, W, b, K, x.dptr_, X_unrolled);
 
-		matrixMultiplyShared<<<dimGrid, dimBlock>>>(w.dptr_, X_unrolled, curr_output, 
-													M, H_unroll, 
-													H_unroll, W_unroll, 
+		matrixMultiplyShared<<<dimGrid, dimBlock>>>(w.dptr_, X_unrolled, curr_output,
+													M, H_unroll,
+													H_unroll, W_unroll,
 													M, W_unroll);
 	}
 	*/
@@ -419,21 +420,21 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 	int W_unroll = H_out * W_out;
 	int H_unroll = C * K * K;
 
-	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1); 
+	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
 	dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH), ceil((1.0 * M)/TILE_WIDTH), B);
 
 
 	// for (int b = 0; b < B; b++) {
 	// 	float* curr_output = &y.dptr_[b * M * H_out * W_out];
 	// 	matrixMultiplySharedUnroll<<<dimGrid, dimBlock>>>(C, H, W, b, K, x.dptr_, curr_output, w.dptr_,
-	// 												M, H_unroll, 
-	// 												H_unroll, W_unroll, 
+	// 												M, H_unroll,
+	// 												H_unroll, W_unroll,
 	// 												M, W_unroll);
 	// }
 
 	matrixMultiplySharedUnroll<<<dimGrid, dimBlock>>>(M, C, H, W, K, x.dptr_, y.dptr_, w.dptr_,
-													M, H_unroll, 
-													H_unroll, W_unroll, 
+													M, H_unroll,
+													H_unroll, W_unroll,
 													M, W_unroll);
 
 
