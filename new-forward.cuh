@@ -302,10 +302,10 @@ __global__ void matrixMultiplySharedUnroll1(int M, int C, int H, int W, int K, c
   int col = threadIdx.x + blockIdx.x * TILE_WIDTH1;
   int row = threadIdx.y + blockIdx.y * TILE_WIDTH1;
 
-	int W_out = W - K + 1;
-	int H_out = H - K + 1;
+	int W_out = W - 6;
+	int H_out = H - 6;
 
-	int kernel_size = K * K;
+	int kernel_size = 49;
 	int row_offset = col / W_out;
 	int col_offset = col % W_out;
 
@@ -326,8 +326,8 @@ __global__ void matrixMultiplySharedUnroll1(int M, int C, int H, int W, int K, c
 			int x_index_c = row_index / kernel_size;
 			int x_index_s = row_index % kernel_size;
 
-			int x_index_row = (x_index_s / K) + row_offset;
-			int x_index_col = (x_index_s % K) + col_offset;
+			int x_index_row = (x_index_s / 7) + row_offset;
+			int x_index_col = (x_index_s % 7) + col_offset;
 
       tileX[threadIdx.y][threadIdx.x] = x4d(blockIdx.z, x_index_c, x_index_row, x_index_col);
     } else {
@@ -365,10 +365,10 @@ __global__ void matrixMultiplySharedUnroll2(int M, int C, int H, int W, int K, c
   int col = threadIdx.x + blockIdx.x * TILE_WIDTH2;
   int row = threadIdx.y + blockIdx.y * TILE_WIDTH2;
 
-	int W_out = W - K + 1;
-	int H_out = H - K + 1;
+	int W_out = W - 6;
+	int H_out = H - 6;
 
-	int kernel_size = K * K;
+	int kernel_size = 49;
 	int row_offset = col / W_out;
 	int col_offset = col % W_out;
 
@@ -389,8 +389,8 @@ __global__ void matrixMultiplySharedUnroll2(int M, int C, int H, int W, int K, c
 			int x_index_c = row_index / kernel_size;
 			int x_index_s = row_index % kernel_size;
 
-			int x_index_row = (x_index_s / K) + row_offset;
-			int x_index_col = (x_index_s % K) + col_offset;
+			int x_index_row = (x_index_s / 7) + row_offset;
+			int x_index_col = (x_index_s % 7) + col_offset;
 
       tileX[threadIdx.y][threadIdx.x] = x4d(blockIdx.z, x_index_c, x_index_row, x_index_col);
     } else {
@@ -486,8 +486,8 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     const int W = x.shape_[3];
     const int K = w.shape_[3];
 
-    const int H_out = H - K + 1;
-    const int W_out = W - K + 1;
+    const int H_out = H - 7 + 1;
+    const int W_out = W - 7 + 1;
 
 	/*
 	int W_grid = ceil((W_out)/16.0);
@@ -538,15 +538,15 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 													M, W_unroll);
 	}
 	*/
-	
+
 	int W_unroll = H_out * W_out;
-	int H_unroll = C * K * K;
+	int H_unroll = C * 7 * 7;
 
 	if(W_unroll < 1000) {
 		dim3 dimBlock(TILE_WIDTH1, TILE_WIDTH1, 1);
 		dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH1), ceil((1.0 * M)/TILE_WIDTH1), B);
 
-		matrixMultiplySharedUnroll1<<<dimGrid, dimBlock>>>(M, C, H, W, K, x.dptr_, y.dptr_, w.dptr_,
+		matrixMultiplySharedUnroll1<<<dimGrid, dimBlock>>>(M, C, H, W, 7, x.dptr_, y.dptr_, w.dptr_,
 														M, H_unroll,
 														H_unroll, W_unroll,
 														M, W_unroll);
@@ -555,12 +555,12 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 		dim3 dimBlock(TILE_WIDTH2, TILE_WIDTH2, 1);
 		dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH2), ceil((1.0 * M)/TILE_WIDTH2), B);
 
-		matrixMultiplySharedUnroll2<<<dimGrid, dimBlock>>>(M, C, H, W, K, x.dptr_, y.dptr_, w.dptr_,
+		matrixMultiplySharedUnroll2<<<dimGrid, dimBlock>>>(M, C, H, W, 7, x.dptr_, y.dptr_, w.dptr_,
 																M, H_unroll,
 																H_unroll, W_unroll,
 																M, W_unroll);
 	}
-	
+
 	/*
 	const float* kernel = w.dptr_;
 	float hostKernel[M*C*K*K];
